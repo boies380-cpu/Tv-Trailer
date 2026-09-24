@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<!-- YouTube exige un Referer valide : ne JAMAIS mettre "no-referrer" ici -->
+<meta name="referrer" content="strict-origin-when-cross-origin">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Trailer Tyzen Streamer</title>
+<style>
+  html,body{margin:0;width:100%;height:100%;background:#000;overflow:hidden;font-family:sans-serif}
+  #player{position:absolute;top:0;left:0;width:100%;height:100%}
+  #bar{position:absolute;left:0;right:0;bottom:0;padding:30px 70px 40px;color:#fff;font-size:26px;
+       background:linear-gradient(transparent,rgba(0,0,0,.8));transition:opacity .25s;opacity:0}
+  #bar.show{opacity:1}
+  #track{height:8px;background:rgba(255,255,255,.3);border-radius:4px;overflow:hidden;margin-top:12px}
+  #fill{height:100%;width:0;background:#e50914}
+</style>
+</head>
+<body>
+<div id="player"></div>
+<div id="bar"><span id="ico">&#10074;&#10074;</span> <span id="time">0:00 / 0:00</span><div id="track"><div id="fill"></div></div></div>
+
+<script>
+(function () {
+  'use strict';
+  var params = new URLSearchParams(location.search);
+  var id = params.get('v') || '';
+  var player = null, hideT = null, tick = null, watchdog = null, playing = false;
+
+  function send(type, data) {
+    try { window.parent.postMessage({ target: 'trailer-embed', type: type, data: data || {} }, '*'); } catch (e) {}
+  }
+  function fmt(s) { s = Math.max(0, Math.floor(s)); var r = s % 60; return Math.floor(s / 60) + ':' + (r < 10 ? '0' : '') + r; }
+  function $(x) { return document.getElementById(x); }
+
+  send('hello');
+  if (!/^[\w-]{6,20}$/.test(id)) { send('error', { code: 'bad-id' }); return; }
+
+  function showBar() {
+    $('bar').className = 'show';
+    clearTimeout(hideT);
+    hideT = setTimeout(function () { $('bar').className = ''; }, 4000);
+  }
+  function togglePause(force) {
+    if (!player || !player.getPlayerState) return;
+    var st = player.getPlayerState();
+    var wantPause = typeof force === 'boolean' ? force : st === 1;
+    if (wantPause) player.pauseVideo(); else player.playVideo();
+    $('ico').innerHTML = wantPause ? '&#9654;' : '&#10074;&#10074;';
+    showBar();
+  }
+  function seek(ms) {
+    if (!player || !player.getCurrentTime) return;
+    player.seekTo(Math.max(0, player.getCurrentTime() + ms / 1000), true);
+    showBar();
+  }
+
+  function onKey(e) {
+    var k = e.keyCode, handled = true;
+    if (k === 10009 || k === 8 || k === 27 || k === 413) send('back');
+    else if (k === 13 || k === 10252) togglePause();
+    else if (k === 415) togglePause(false);
+    else if (k === 19) togglePause(true);
+    else if (k === 37 || k === 412) seek(-10000);
+    else if (k === 39 || k === 417) seek(10000);
+    else if (k === 38 || k === 40) showBar();
+    else handled = false;
+    if (handled) { e.preventDefault(); e.stopPropagation(); }
+  }
+  document.addEventListener('keydown', onKey, true);
+
+  // Commandes envoyées par l'application parente
+  window.addEventListener('message', function (e) {
+    var m = e.data;
+    if (!m || m.target !== 'trailer-player') return;
+    if (m.cmd === 'toggle') togglePause();
+    else if (m.cmd === 'play') togglePause(false);
+    else if (m.cmd === 'pause') togglePause(true);
+    else if (m.cmd === 'seek') seek(m.ms || 0);
+    else if (m.cmd === 'bar') showBar();
+  });
+
+  window.onYouTubeIframeAPIReady = function () {
+    player = new YT.Player('player', {
+      videoId: id,
+      width: '100%',
+      height: '100%',
+      playerVars: {
+        autoplay: 1, controls: 0, rel: 0, playsinline: 1, modestbranding: 1, fs: 0,
+        iv_load_policy: 3, disablekb: 1, enablejsapi: 1, hl: params.get('hl') || 'fr',
+        origin: location.origin
+      },
+      events: {
+        onReady: function () {
+          send('ready');
+          player.playVideo();
+          // Si l'autoplay est bloqué, retenter en muet puis rétablir le son
+          setTimeout(function () {
+            if (!playing) { try { player.mute(); player.playVideo(); } catch (e) {} }
+          }, 3000);
+        },
+        onStateChange: function (ev) {
+          if (ev.data === 1) {
+            if (!playing) { playing = true; clearTimeout(watchdog); send('playing'); showBar(); }
+            $('ico').innerHTML = '&#10074;&#10074;';
+            try { if (player.isMuted()) player.unMute(); } catch (e) {}
+          } else if (ev.data === 2) { $('ico').innerHTML = '&#9654;'; }
+          else if (ev.data === 0) { send('ended'); }
+        },
+        onError: function (ev) { send('error', { code: ev.data }); }
+      }
+    });
+    tick = setInterval(function () {
+      if (!player || !player.getCurrentTime || !player.getDuration) return;
+      var c = player.getCurrentTime() || 0, d = player.getDuration() || 0;
+      $('time').textContent = fmt(c) + ' / ' + fmt(d);
+      $('fill').style.width = (d > 0 ? Math.min(100, c / d * 100) : 0) + '%';
+    }, 500);
+  };
+
+  watchdog = setTimeout(function () { if (!playing) send('error', { code: 'timeout' }); }, 20000);
+
+  var s = document.createElement('script');
+  s.src = 'https://www.youtube.com/iframe_api';
+  s.onerror = function () { send('error', { code: 'api-load' }); };
+  document.head.appendChild(s);
+})();
+</script>
+</body>
+</html>
